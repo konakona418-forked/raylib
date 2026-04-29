@@ -210,6 +210,12 @@
     #define ACCESS(fn) access(fn, F_OK)
 #endif
 
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+    #include <sys/wait.h>           // Required for: waitpid() [Used in CheckProcess()]
+    #include <signal.h>             // Required for: kill() [Used in PauseProcess(), ResumeProcess(), CloseProcess()]
+    #include <sys/types.h>          // Required for: pid_t [Used in Process struct definition]
+#endif
+
 //----------------------------------------------------------------------------------
 // Defines and Macros
 //----------------------------------------------------------------------------------
@@ -4209,6 +4215,128 @@ int GetTouchPointId(int index)
 int GetTouchPointCount(void)
 {
     return CORE.Input.Touch.pointCount;
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition: Process Management
+//----------------------------------------------------------------------------------
+
+// Initialize a new process, returns a Process struct
+RLAPI Process InitProcess(const char *command, char *const args[])
+{
+    // The last element of the args array must be NULL
+
+    Process process = { 0 };
+
+#if defined (__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to create process");
+    }
+    else if (pid == 0)
+    {
+        // Child process
+        execvp(command, args);
+
+        // If execvp returns, it must have failed
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to execute process command");
+        exit(1);
+    }
+    else
+    {
+        process.pid = pid;
+    }
+#else
+    TRACELOG(LOG_WARNING, "PROCESS: Process management not supported on this platform");
+#endif
+
+    return process;
+}
+
+// Check if a process is still running, updates Process struct
+RLAPI bool CheckProcess(Process* process)
+{
+#if defined (__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    int status;
+    pid_t result = waitpid(process->pid, &status, WNOHANG);
+
+    if (result == 0)
+    {
+        // Still running
+        return true;
+    }
+    else if (result == process->pid)
+    {
+        // Not running
+        if (WIFEXITED(status))
+        {
+            process->exitCode = WEXITSTATUS(status);
+        }
+        else if (WIFSIGNALED(status))
+        {
+            // Terminated by signal
+            process->exitCode = -1;
+        }
+        return false;
+    }
+    else
+    {
+        // Error occurred
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to check process status");
+        return false;
+    }
+#else
+    TRACELOG(LOG_WARNING, "PROCESS: Process management not supported on this platform");
+#endif
+
+    return false;
+}
+
+// Pause process execution
+RLAPI void PauseProcess(Process process)
+{
+#if defined (__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    if (kill(process.pid, SIGSTOP) != 0)
+    {
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to pause process");
+    }
+#else
+    TRACELOG(LOG_WARNING, "PROCESS: Process management not supported on this platform");
+#endif
+}
+
+// Resume paused process execution
+RLAPI void ResumeProcess(Process process)
+{
+#if defined (__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    if (kill(process.pid, SIGCONT) != 0)
+    {
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to resume process");
+    }
+#else
+    TRACELOG(LOG_WARNING, "PROCESS: Process management not supported on this platform");
+#endif
+}
+
+// Close process and free resources
+RLAPI void CloseProcess(Process process)
+{
+#if defined (__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    if (kill(process.pid, SIGTERM) != 0)
+    {
+        TRACELOG(LOG_WARNING, "PROCESS: Failed to terminate process");
+
+        // Kill the process anyway
+        kill(process.pid, SIGKILL);
+    }
+
+    // Wait process termination
+    waitpid(process.pid, NULL, 0);
+#else
+    TRACELOG(LOG_WARNING, "PROCESS: Process management not supported on this platform");
+#endif
 }
 
 //----------------------------------------------------------------------------------
